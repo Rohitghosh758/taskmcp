@@ -1,0 +1,64 @@
+from fastapi import FastAPI, Request, HTTPException
+import requests
+import os
+
+app = FastAPI()
+
+# Set your Spotify API credentials
+SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
+SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
+SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
+SPOTIFY_API_URL = "https://api.spotify.com/v1"
+
+# Get Access Token
+def get_access_token():
+    auth_response = requests.post(
+        SPOTIFY_TOKEN_URL,
+        data={"grant_type": "client_credentials"},
+        auth=(SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET),
+    )
+    if auth_response.status_code != 200:
+        raise HTTPException(status_code=auth_response.status_code, detail="Failed to get access token")
+    return auth_response.json()["access_token"]
+
+ACCESS_TOKEN = get_access_token()
+
+# Middleware to refresh token if expired
+@app.middleware("http")
+async def refresh_token_middleware(request: Request, call_next):
+    global ACCESS_TOKEN
+    response = await call_next(request)
+    if response.status_code == 401:  # Unauthorized, token might be expired
+        ACCESS_TOKEN = get_access_token()
+        response = await call_next(request)
+    return response
+
+# MCP Endpoint to Search Tracks
+@app.get("/search")
+async def search_tracks(query: str):
+    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
+    response = requests.get(f"{SPOTIFY_API_URL}/search", headers=headers, params={"q": query, "type": "track"})
+    if response.status_code != 200:
+        raise HTTPException(status_code=response.status_code, detail="Failed to search tracks")
+    return response.json()
+
+# MCP Endpoint to Get Playlist
+@app.get("/playlist/{playlist_id}")
+async def get_playlist(playlist_id: str):
+    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
+    response = requests.get(f"{SPOTIFY_API_URL}/playlists/{playlist_id}", headers=headers)
+    if response.status_code != 200:
+        raise HTTPException(status_code=response.status_code, detail="Failed to get playlist")
+    return response.json()
+
+# Example MCP Interaction
+@app.get("/mcp")
+async def mcp_interaction(action: str, query: str = None):
+    if action == "search":
+        return await search_tracks(query)
+    elif action == "get_playlist":
+        return await get_playlist(query)
+    else:
+        raise HTTPException(status_code=400, detail="Invalid action")
+
+# Run the server using uvicorn (e.g., uvicorn main:app --reload)
